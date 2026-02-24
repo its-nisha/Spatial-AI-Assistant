@@ -12,7 +12,7 @@ import io
 @st.cache_resource
 def load_models():
     # Load YOLOv10 Nano (Very fast for web)
-    det_model = YOLO("yolov10n.pt")
+    det_model = YOLO("yolov10s.pt")
     # Load Depth Anything V2 (Small for faster inference on Streamlit Cloud)
     depth_pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
     return det_model, depth_pipe
@@ -47,20 +47,34 @@ if img_file_buffer is not None:
 
     # 5. FUSION LOGIC
     for box in results.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        label = det_model.names[int(box.cls[0])]
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        
-        # Pull raw depth and calculate meters
-        raw_val = depth_map[cy, cx]
-        dist_m = SCALE_FACTOR / raw_val if raw_val > 0 else 0
-        detections_for_voice.append(f"a {label} at {dist_m:.1f} meters")
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            label = det_model.names[int(box.cls[0])]
+            
+            # 1. Define the area of the object in the depth map
+            crop_depth = depth_map[y1:y2, x1:x2]
 
-        # Draw visuals (BGR for OpenCV)
-        color = (0, 255, 0) if dist_m > 1.0 else (0, 0, 255)
-        cv2.rectangle(img_cv, (x1, y1), (x2, y2), color, 3)
-        cv2.putText(img_cv, f"{label}: {dist_m:.2f}m", (x1, y1-10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            if crop_depth.size > 0:
+                # 2. Calculate the median raw value FIRST
+                raw_val = np.median(crop_depth)
+                
+                # 3. Calculate distance SECOND
+                dist_m = SCALE_FACTOR / raw_val if raw_val > 0 else 0
+                
+                # 4. Filter and add to voice list
+                if 0.1 < dist_m < 15.0:
+                    detections_for_voice.append(f"a {label} at {dist_m:.1f} meters")
+                
+                # 5. Visuals (Now dist_m is guaranteed to exist)
+                color = (0, 255, 0) if dist_m > 1.0 else (0, 0, 255)
+                cv2.rectangle(img_cv, (x1, y1), (x2, y2), color, 3)
+                cv2.putText(img_cv, f"{label}: {dist_m:.2f}m", (x1, y1-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                
+            # Draw visuals (BGR for OpenCV)
+            color = (0, 255, 0) if dist_m > 1.0 else (0, 0, 255)
+            cv2.rectangle(img_cv, (x1, y1), (x2, y2), color, 3)
+            cv2.putText(img_cv, f"{label}: {dist_m:.2f}m", (x1, y1-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     # 6. DISPLAY RESULTS
     # Streamlit uses RGB, so we convert back
